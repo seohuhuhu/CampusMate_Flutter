@@ -108,6 +108,7 @@ Flutter 웹 기반으로 구현하여 브라우저 탭마다 독립 세션 ID를
 cd best_flutter_ui_templates
 flutter pub get
 flutter run -d chrome   # 웹 권장 (멀티탭 시뮬레이션 가능)
+flutter run
 ```
 
 ---
