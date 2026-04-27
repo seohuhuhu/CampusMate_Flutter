@@ -375,9 +375,23 @@ class _MealBuddyListScreenState extends State<MealBuddyListScreen> {
     setState(() => _posts[indexInPosts].currentPeople++);
     await _savePosts();
 
-    // 매너 온도: 참가자 +2점, 글 작성자 +3점
-    await _updateTrustScore(_mySessionId, 2);
-    await _updateTrustScore(post.authorId, 3);
+    // 매너 온도: 참가자 +2점 (직접 갱신), 글 작성자 +3점 (SharedPreferences만)
+    final newScore = (_myTrustScore + 2).clamp(0, 100);
+
+    final tPrefs = await SharedPreferences.getInstance();
+    await tPrefs.reload();
+    final tRaw = tPrefs.getString(_trustScoresKey);
+    final tMap = tRaw != null
+        ? Map<String, dynamic>.from(jsonDecode(tRaw) as Map)
+        : <String, dynamic>{};
+    tMap[_mySessionId] = newScore;
+    // 글 작성자 점수도 함께 업데이트
+    final authorCurrent = (tMap[post.authorId] as int?) ?? 70;
+    tMap[post.authorId] = (authorCurrent + 3).clamp(0, 100);
+    await tPrefs.setString(_trustScoresKey, jsonEncode(tMap));
+
+    // UI 직접 갱신
+    if (mounted) setState(() => _myTrustScore = newScore);
 
     if (mounted) {
       _snack(
@@ -393,12 +407,54 @@ class _MealBuddyListScreenState extends State<MealBuddyListScreen> {
       _snack('내가 올린 글만 삭제할 수 있어요.', Colors.red);
       return;
     }
+
+    // SharedPreferences에서 최신 데이터 로드 — 다른 탭에서 참가한 경우도 감지
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final jsonList = prefs.getStringList(_storageKey) ?? [];
+    final freshPost = jsonList
+        .map((j) => MealPost.fromMap(jsonDecode(j) as Map<String, dynamic>))
+        .firstWhere((p) => p.id == post.id, orElse: () => post);
+
+    final hasParticipants = freshPost.currentPeople > 1;
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: const Text('삭제 확인'),
-        content: const Text('이 모집 글을 삭제할까요?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('이 모집 글을 삭제할까요?'),
+            if (hasParticipants) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.red[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red[200]!),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.local_fire_department,
+                        color: Colors.red[400], size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '참가자가 있는 글을 삭제하면\n매너 온도가 3° 하락합니다.',
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.red[700]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -410,6 +466,24 @@ class _MealBuddyListScreenState extends State<MealBuddyListScreen> {
       ),
     );
     if (confirm == true) {
+      // 참가자가 있는 상태로 삭제 → 매너 온도 -3°
+      if (hasParticipants) {
+        final newScore = (_myTrustScore - 3).clamp(0, 100);
+
+        // SharedPreferences 직접 업데이트
+        final tPrefs = await SharedPreferences.getInstance();
+        await tPrefs.reload();
+        final tRaw = tPrefs.getString(_trustScoresKey);
+        final tMap = tRaw != null
+            ? Map<String, dynamic>.from(jsonDecode(tRaw) as Map)
+            : <String, dynamic>{};
+        tMap[_mySessionId] = newScore;
+        await tPrefs.setString(_trustScoresKey, jsonEncode(tMap));
+
+        // UI 직접 갱신
+        if (mounted) setState(() => _myTrustScore = newScore);
+        if (mounted) _snack('참가자가 있는 글을 삭제했습니다.  매너 온도 -3°', Colors.red[400]!);
+      }
       setState(() => _posts.removeAt(indexInPosts));
       await _savePosts();
     }
@@ -512,9 +586,15 @@ class _MealBuddyListScreenState extends State<MealBuddyListScreen> {
             const Text('점수를 올리려면:',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
             const SizedBox(height: 6),
-            _trustTip(Icons.group_add, '밥친구에 참가하기', '+2°'),
-            _trustTip(Icons.people, '내 글에 누군가 참가', '+3°'),
-            _trustTip(Icons.cancel_outlined, '스터디룸 제때 취소', '+1°'),
+            _trustTip(Icons.group_add, '밥친구에 참가하기', '+2°', isBonus: true),
+            _trustTip(Icons.people, '내 글에 누군가 참가', '+3°', isBonus: true),
+            _trustTip(Icons.cancel_outlined, '스터디룸 제때 취소', '+1°', isBonus: true),
+            const SizedBox(height: 12),
+            const Text('점수가 떨어지는 경우:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+            const SizedBox(height: 6),
+            _trustTip(Icons.delete_forever_outlined, '참가자 있는 글 삭제', '-3°', isBonus: false),
+            _trustTip(Icons.event_busy_outlined, '스터디룸 당일 취소', '-2°', isBonus: false),
             const SizedBox(height: 8),
             Text(
               '⚠ AI 매칭 시 신뢰도가 높은 유저의 글이 상단 노출됩니다.',
@@ -532,19 +612,19 @@ class _MealBuddyListScreenState extends State<MealBuddyListScreen> {
     );
   }
 
-  Widget _trustTip(IconData icon, String label, String bonus) {
+  Widget _trustTip(IconData icon, String label, String bonus,
+      {bool isBonus = true}) {
+    final color = isBonus ? const Color(0xFF2ECC71) : Colors.red[400]!;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         children: [
-          Icon(icon, size: 15, color: _teal),
+          Icon(icon, size: 15, color: color),
           const SizedBox(width: 8),
           Expanded(child: Text(label, style: const TextStyle(fontSize: 13))),
           Text(bonus,
               style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                  color: _trustColor(_myTrustScore))),
+                  fontSize: 13, fontWeight: FontWeight.bold, color: color)),
         ],
       ),
     );
@@ -767,6 +847,39 @@ class _MealBuddyListScreenState extends State<MealBuddyListScreen> {
             icon: const Icon(Icons.refresh),
             onPressed: _loadPosts,
             tooltip: '새로고침',
+          ),
+          // 내 매너 온도
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              IconButton(
+                icon: Icon(
+                  Icons.local_fire_department,
+                  color: _trustColor(_myTrustScore),
+                ),
+                onPressed: _showTrustInfoDialog,
+                tooltip: '내 매너 온도',
+              ),
+              // 온도 숫자 뱃지
+              Positioned(
+                right: 4,
+                bottom: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: _trustColor(_myTrustScore),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '$_myTrustScore°',
+                    style: const TextStyle(
+                        fontSize: 9,
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
           ),
           // AI 취향 설정
           IconButton(

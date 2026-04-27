@@ -181,20 +181,29 @@ class _HotelHomeScreenState extends State<HotelHomeScreen>
 
     setState(() {
       _myBookings.remove(roomId);
-      // 취소한 날짜가 현재 선택 날짜와 같으면 _bookingCounts도 갱신
       if (dateStr == DateFormat("yyyy-MM-dd").format(selectedDate)) {
         _bookingCounts = Map.from(counts);
       }
     });
 
-    // 매너 온도 +1: 제때 취소한 유저 보상
-    await _addCancelTrustBonus();
+    // 당일 취소 여부 판단
+    final today = DateFormat("yyyy-MM-dd").format(DateTime.now());
+    final isSameDay = dateStr == today;
 
-    _showSnack('예약이 취소되었습니다.  매너 온도 +1°', Colors.grey.shade600);
+    if (isSameDay) {
+      // 당일 취소: 매너 온도 -2°
+      await _changeTrustScore(-2);
+      _showSnack('당일 취소는 다른 유저의 기회를 빼앗아요.  매너 온도 -2°',
+          Colors.orange.shade700);
+    } else {
+      // 사전 취소: 매너 온도 +1°
+      await _changeTrustScore(1);
+      _showSnack('예약이 취소되었습니다.  매너 온도 +1°', Colors.grey.shade600);
+    }
   }
 
-  /// 스터디룸 예약 정상 취소 시 trust_scores에 +1 반영
-  Future<void> _addCancelTrustBonus() async {
+  /// trust_scores에 delta 반영
+  Future<void> _changeTrustScore(int delta) async {
     const trustScoresKey = 'trust_scores';
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
@@ -203,7 +212,7 @@ class _HotelHomeScreenState extends State<HotelHomeScreen>
         ? Map<String, dynamic>.from(jsonDecode(raw) as Map)
         : <String, dynamic>{};
     final current = (map[_mySessionId] as int?) ?? 70;
-    map[_mySessionId] = (current + 1).clamp(0, 100);
+    map[_mySessionId] = (current + delta).clamp(0, 100);
     await prefs.setString(trustScoresKey, jsonEncode(map));
   }
 
